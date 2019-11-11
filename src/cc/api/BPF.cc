@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <iostream>
 #include <memory>
+#include <random>
 #include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
