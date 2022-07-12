@@ -878,7 +878,7 @@ std::string shorten_event_name(const std::string& name) {
   res.assign(name);
   res.resize(kEventNameSizeLimit - kRandomSuffixLen);
   // Modulo 10^16 to keep it shorter than 16 digits. 
-  res.append(std::to_string(res % 10000000000000000LU));
+  res.append(std::to_string(res_hash % 10000000000000000LU));
   return res;
 }
 
