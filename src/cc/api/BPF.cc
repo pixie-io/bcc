@@ -873,12 +873,12 @@ constexpr size_t kEventNameSizeLimit = 224;
 std::string shorten_event_name(const std::string& name) {
   constexpr size_t kRandomSuffixLen = 16;
   std::string res;
-  size_t res_hash = std::hash<std::string>{}(res);
+  size_t hash = std::hash<std::string>{}(name);
   res.reserve(kEventNameSizeLimit);
   res.assign(name);
   res.resize(kEventNameSizeLimit - kRandomSuffixLen);
   // Modulo 10^16 to keep it shorter than 16 digits. 
-  res.append(std::to_string(res_hash % 10000000000000000LU));
+  res.append(std::to_string(hash % 10000000000000000LU));
   return res;
 }
 
