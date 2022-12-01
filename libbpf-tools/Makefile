@@ -3,7 +3,8 @@ OUTPUT := $(abspath .output)
 CLANG ?= clang
 LLVM_STRIP ?= llvm-strip
 BPFTOOL_SRC := $(abspath ./bpftool/src)
-BPFTOOL ?= $(OUTPUT)/bpftool/bpftool
+BPFTOOL_OUTPUT ?= $(abspath $(OUTPUT)/bpftool)
+BPFTOOL ?= $(BPFTOOL_OUTPUT)/bootstrap/bpftool
 LIBBPF_SRC := $(abspath ../src/cc/libbpf/src)
 LIBBPF_OBJ := $(abspath $(OUTPUT)/libbpf.a)
 INCLUDES := -I$(OUTPUT) -I../src/cc/libbpf/include/uapi
@@ -11,7 +12,9 @@ CFLAGS := -g -O2 -Wall
 BPFCFLAGS := -g -O2 -Wall
 INSTALL ?= install
 prefix ?= /usr/local
-ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/' | sed 's/ppc64le/powerpc/' | sed 's/mips.*/mips/')
+ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/' \
+			 | sed 's/ppc64le/powerpc/' | sed 's/mips.*/mips/' \
+			 | sed 's/riscv64/riscv/' | sed 's/loongarch.*/loongarch/')
 BTFHUB_ARCHIVE ?= $(abspath btfhub-archive)
 
 ifeq ($(wildcard $(ARCH)/),)
@@ -52,10 +55,13 @@ APPS = \
 	runqlat \
 	runqlen \
 	runqslower \
+	sigsnoop \
+	slabratetop \
 	softirqs \
 	solisten \
 	statsnoop \
 	syscount \
+	tcptracer \
 	tcpconnect \
 	tcpconnlat \
 	tcplife \
@@ -69,7 +75,8 @@ export OUTPUT BPFTOOL ARCH BTFHUB_ARCHIVE APPS
 
 FSDIST_ALIASES = btrfsdist ext4dist nfsdist xfsdist
 FSSLOWER_ALIASES = btrfsslower ext4slower nfsslower xfsslower
-APP_ALIASES = $(FSDIST_ALIASES) $(FSSLOWER_ALIASES)
+SIGSNOOP_ALIAS = killsnoop
+APP_ALIASES = $(FSDIST_ALIASES) $(FSSLOWER_ALIASES) ${SIGSNOOP_ALIAS}
 
 COMMON_OBJ = \
 	$(OUTPUT)/trace_helpers.o \
@@ -114,14 +121,13 @@ clean:
 	$(call msg,CLEAN)
 	$(Q)rm -rf $(OUTPUT) $(APPS) $(APP_ALIASES)
 
-$(OUTPUT) $(OUTPUT)/libbpf:
+$(OUTPUT) $(OUTPUT)/libbpf $(BPFTOOL_OUTPUT):
 	$(call msg,MKDIR,$@)
 	$(Q)mkdir -p $@
 
-.PHONY: bpftool
-bpftool:
-	$(Q)mkdir -p $(OUTPUT)/bpftool
-	$(Q)$(MAKE) ARCH= CROSS_COMPILE=  OUTPUT=$(OUTPUT)/bpftool/ -C $(BPFTOOL_SRC)
+$(BPFTOOL): | $(BPFTOOL_OUTPUT)
+	$(call msg,BPFTOOL,$@)
+	$(Q)$(MAKE) ARCH= CROSS_COMPILE=  OUTPUT=$(BPFTOOL_OUTPUT)/ -C $(BPFTOOL_SRC) bootstrap
 
 $(APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) $(COMMON_OBJ) | $(OUTPUT)
 	$(call msg,BINARY,$@)
@@ -133,7 +139,7 @@ $(OUTPUT)/%.o: %.c $(wildcard %.h) $(LIBBPF_OBJ) | $(OUTPUT)
 	$(call msg,CC,$@)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
 
-$(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT) bpftool
+$(OUTPUT)/%.skel.h: $(OUTPUT)/%.bpf.o | $(OUTPUT) $(BPFTOOL)
 	$(call msg,GEN-SKEL,$@)
 	$(Q)$(BPFTOOL) gen skeleton $< > $@
 
@@ -166,6 +172,10 @@ $(FSSLOWER_ALIASES): fsslower
 	$(Q)ln -f -s $^ $@
 
 $(FSDIST_ALIASES): fsdist
+	$(call msg,SYMLINK,$@)
+	$(Q)ln -f -s $^ $@
+
+$(SIGSNOOP_ALIAS): sigsnoop
 	$(call msg,SYMLINK,$@)
 	$(Q)ln -f -s $^ $@
 
