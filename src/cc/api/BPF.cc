@@ -856,14 +856,14 @@ bool BPF::add_module(std::string module)
 
 namespace {
 
-std::string random_alnum_string(int len) {
+std::string random_alnum_string(const int len) {
   static constexpr char kDict[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-  static std::random_device rd;
-  std::uniform_int_distribution<size_t> dist(0, sizeof(kDict)-1);
+  static std::mt19937 gen;
+  static std::uniform_int_distribution<size_t> dist(0, sizeof(kDict) - 2);
   std::string res;
-  res.reserve(len);
+  res.resize(len);
   for (int i = 0; i < len; ++i) {
-    res.push_back(kDict[dist(rd)]);
+    res[i] = kDict[dist(gen)];
   }
   return res;
 }
