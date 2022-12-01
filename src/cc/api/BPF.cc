@@ -860,7 +860,7 @@ std::string random_alnum_string(int len) {
   static constexpr char kDict[] = "0123456789abcdefghijklmnopqrstuvwxyz";
   static std::random_device rd;
   static std::mt19937 gen(rd());
-  std::uniform_int_distribution<size_t> dist(0, sizeof(kDict)-1);
+  std::uniform_int_distribution<size_t> dist(0, sizeof(kDict)-2);
   std::string res;
   res.reserve(len);
   for (int i = 0; i < len; ++i) {
