@@ -181,11 +181,11 @@ void perf_reader_event_read(struct perf_reader *reader) {
   // }
   //
   // As stated in https://github.com/iovisor/bcc/pull/3822#issuecomment-1023775038,
-  // the official BCC code above can handle occasional burst by eagerly depleting the perf buffer.
+  // the official BCC code above can handle occasional bursts by eagerly depleting the perf buffer.
   //
   // The worst case scenario is that the producer constantly produces more data
-  // than the consumer can keep up, and results into an infinite loop. Pixie team have observed
-  // a few cases where an perf buffer polling iteration took very long time, which was fixed
+  // than the consumer can process, and results in an infinite loop. The Pixie team has observed
+  // a few cases where a perf buffer polling iteration took a very long time, which was fixed
   // by this new loop condition.
   data_head = read_data_head(perf_header);
   while (perf_header->data_tail != data_head) {
