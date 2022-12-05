@@ -172,6 +172,21 @@ void perf_reader_event_read(struct perf_reader *reader) {
   // Consume all the events on this ring, calling the cb function for each one.
   // The message may fall on the ring boundary, in which case copy the message
   // into a malloced buffer.
+  // 
+  // NOTE: The loop condition is different from the official BCC repo. The official impl code is
+  // as follows:
+  // for (data_head = read_data_head(perf_header); perf_header->data_tail != data_head;
+  //      data_head = read_data_head(perf_header)) {
+  //     ... Loop body
+  // }
+  //
+  // As stated in https://github.com/iovisor/bcc/pull/3822#issuecomment-1023775038,
+  // the official BCC code above can handle occasional bursts by eagerly depleting the perf buffer.
+  //
+  // The worst case scenario is that the producer constantly produces more data
+  // than the consumer can process, and results in an infinite loop. The Pixie team has observed
+  // a few cases where a perf buffer polling iteration took a very long time, which was fixed
+  // by this new loop condition.
   data_head = read_data_head(perf_header);
   while (perf_header->data_tail != data_head) {
     uint64_t data_tail = perf_header->data_tail;
