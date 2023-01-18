@@ -23,7 +23,6 @@
 #include <fcntl.h>
 #include <iostream>
 #include <memory>
-#include <random>
 #include <sstream>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -856,31 +855,23 @@ bool BPF::add_module(std::string module)
 
 namespace {
 
-std::string random_alnum_string(const int len) {
-  static constexpr char kDict[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-  static std::mt19937 gen;
-  static std::uniform_int_distribution<size_t> dist(0, sizeof(kDict) - 2);
-  std::string res;
-  res.resize(len);
-  for (int i = 0; i < len; ++i) {
-    res[i] = kDict[dist(gen)];
-  }
-  return res;
-}
-
 constexpr size_t kEventNameSizeLimit = 224;
 
 std::string shorten_event_name(const std::string& name) {
-  constexpr size_t kRandomSuffixLen = 16;
+  constexpr size_t kHashSuffixLen = 16;
   std::string res;
   res.reserve(kEventNameSizeLimit);
   res.assign(name);
-  res.resize(kEventNameSizeLimit - kRandomSuffixLen);
-  res.append(random_alnum_string(kRandomSuffixLen));
+  res.resize(kEventNameSizeLimit - kHashSuffixLen);
+
+  std::stringstream stream;
+  size_t hash = std::hash<std::string>{}(name);
+  stream << std::hex << hash;
+  res.append(stream.str());
   return res;
 }
 
-}  // namespace
+} // namespace
 
 std::string BPF::get_uprobe_event(const std::string& binary_path,
                                   uint64_t offset, bpf_probe_attach_type type,
@@ -891,13 +882,7 @@ std::string BPF::get_uprobe_event(const std::string& binary_path,
   if (pid != -1)
     res += "_" + std::to_string(pid);
   if (res.size() > kEventNameSizeLimit) {
-    auto iter = name_map_.find(res);
-    if (iter != name_map_.end()) {
-      return iter->second;
-    }
-    std::string shortend_name = shorten_event_name(res);
-    name_map_[res] = shortend_name;
-    return shortend_name;
+    return shorten_event_name(res);
   }
   return res;
 }
