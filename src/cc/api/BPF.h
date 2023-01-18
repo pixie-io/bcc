@@ -341,9 +341,6 @@ class BPF {
   std::string all_bpf_program_;
 
   std::map<std::string, open_probe_t> kprobes_;
-  // For uprobes, if the binary path is longer than 250, we'll shorten them. And then keep the
-  // mapping.
-  std::map<std::string, std::string> name_map_;
   std::map<std::string, open_probe_t> uprobes_;
   std::map<std::string, open_probe_t> tracepoints_;
   std::map<std::string, open_probe_t> raw_tracepoints_;
