@@ -92,7 +92,8 @@ bool TableStorage::iterator::operator==(const iterator &rhs) const {
   return &**impl_ == &**rhs.impl_;
 }
 bool TableStorage::iterator::operator!=(const iterator &rhs) const {
-  return &**impl_ != &**rhs.impl_;
+  // See note in shared_table.cc operator !=.
+  return *impl_ != *rhs.impl_;
 }
 TableStorage::iterator::reference TableStorage::iterator::operator*() const { return **impl_; }
 TableStorage::iterator::pointer TableStorage::iterator::operator->() const { return &**impl_; }

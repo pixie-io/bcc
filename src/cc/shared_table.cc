@@ -43,6 +43,13 @@ class SharedTableStorage : public TableStorageImpl {
     }
     virtual value_type &operator*() const override { return *it_; }
     virtual pointer operator->() const override { return &*it_; }
+
+    // Introduce thsi function since the implementation of this class makes it very difficult to know
+    // if you are at the end of the map. Without this the iterator compare function sometimes accesses
+    // unallocated memory.
+    virtual bool operator!=(const self_type &rhs) const override {
+      return it_ != reinterpret_cast<const iterator*>(&rhs)->it_;
+    }
   };
   virtual ~SharedTableStorage() {}
   virtual bool Find(const string &name, TableStorage::iterator &result) const override;

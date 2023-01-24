@@ -32,6 +32,7 @@ class BpfFsTableStorage : public TableStorageImpl {
     virtual self_type &operator++() override;
     virtual value_type &operator*() const override;
     virtual pointer operator->() const override;
+    virtual bool operator!=(const self_type &rhs) const override;
   };
   virtual ~BpfFsTableStorage() {}
   virtual bool Find(const string &name, TableStorage::iterator &result) const override;

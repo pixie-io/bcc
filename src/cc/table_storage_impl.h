@@ -32,6 +32,7 @@ class TableStorageIteratorImpl {
   virtual value_type &operator*() const = 0;
   virtual pointer operator->() const = 0;
 
+  virtual bool operator!=(const self_type &rhs) const = 0;
  private:
 };
 
