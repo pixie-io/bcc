@@ -4,7 +4,11 @@
 //
 // Based on opensnoop(8) from BCC by Brendan Gregg and others.
 // 14-Feb-2020   Brendan Gregg   Created this.
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
 #include <argp.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -14,6 +18,7 @@
 #include <unistd.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
+#include "compat.h"
 #include "opensnoop.h"
 #include "opensnoop.skel.h"
 #include "btf_helpers.h"
@@ -21,22 +26,14 @@
 #ifdef USE_BLAZESYM
 #include "blazesym.h"
 #endif
-
-/* Tune the buffer size and wakeup rate. These settings cope with roughly
- * 50k opens/sec.
- */
-#define PERF_BUFFER_PAGES	64
-#define PERF_BUFFER_TIME_MS	10
-
-/* Set the poll timeout when no events occur. This can affect -d accuracy. */
-#define PERF_POLL_TIMEOUT_MS	100
+#include "path_helpers.h"
 
 #define NSEC_PER_SEC		1000000000ULL
 
 static volatile sig_atomic_t exiting = 0;
 
 #ifdef USE_BLAZESYM
-static blazesym *symbolizer;
+static struct blaze_symbolizer *symbolizer;
 #endif
 
 static struct env {
@@ -53,6 +50,7 @@ static struct env {
 #ifdef USE_BLAZESYM
 	bool callers;
 #endif
+	bool full_path;
 } env = {
 	.uid = INVALID_UID
 };
@@ -84,6 +82,7 @@ const char argp_program_doc[] =
 #ifdef USE_BLAZESYM
 "    ./opensnoop -c        # show calling functions\n"
 #endif
+"    ./opensnoop -F        # show full path for an open file\n"
 "";
 
 static const struct argp_option opts[] = {
@@ -101,6 +100,7 @@ static const struct argp_option opts[] = {
 #ifdef USE_BLAZESYM
 	{ "callers", 'c', NULL, 0, "Show calling functions", 0 },
 #endif
+	{ "full-path", 'F', NULL, 0, "Show full path", 0 },
 	{},
 };
 
@@ -173,6 +173,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		env.callers = true;
 		break;
 #endif
+	case 'F':
+		env.full_path = true;
+		break;
 	case ARGP_KEY_ARG:
 		if (pos_args++) {
 			fprintf(stderr,
@@ -199,35 +202,33 @@ static void sig_int(int signo)
 	exiting = 1;
 }
 
-void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
+int handle_event(void *ctx, void *data, size_t data_sz)
 {
 	struct event e;
-	struct tm *tm;
 #ifdef USE_BLAZESYM
-	const blazesym_result *result = NULL;
-	const blazesym_csym *sym;
+	const struct blaze_syms *syms = NULL;
+	const struct blaze_sym *sym;
 	int i, j;
 #endif
 	int sps_cnt;
 	char ts[32];
-	time_t t;
 	int fd, err;
 
-	if (data_sz < sizeof(e)) {
+	if (data_sz < sizeof(struct event)) {
 		printf("Error: packet too small\n");
-		return;
+		return -1;
 	}
+
 	/* Copy data as alignment in the perf buffer isn't guaranteed. */
 	memcpy(&e, data, sizeof(e));
 
 	/* name filtering is currently done in user space */
 	if (env.name && strstr(e.comm, env.name) == NULL)
-		return;
+		return -1;
 
 	/* prepare fields */
-	time(&t);
-	tm = localtime(&t);
-	strftime(ts, sizeof(ts), "%H:%M:%S", tm);
+	str_timestamp("%H:%M:%S", ts, sizeof(ts));
+
 	if (e.ret >= 0) {
 		fd = e.ret;
 		err = 0;
@@ -237,11 +238,13 @@ void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 	}
 
 #ifdef USE_BLAZESYM
-	sym_src_cfg cfgs[] = {
-		{ .src_type = SRC_T_PROCESS, .params = { .process = { .pid = e.pid }}},
+	struct blaze_symbolize_src_process src = {
+		.type_size = sizeof(src),
+		.pid = e.pid,
+		.debug_syms = true,
 	};
 	if (env.callers)
-		result = blazesym_symbolize(symbolizer, cfgs, 1, (const uint64_t *)&e.callers, 2);
+		syms = blaze_symbolize_process_abs_addrs(symbolizer, &src, (const uint64_t *)&e.callers, 2);
 #endif
 
 	/* print output */
@@ -257,27 +260,36 @@ void handle_event(void *ctx, int cpu, void *data, __u32 data_sz)
 	printf("%-6d %-16s %3d %3d ", e.pid, e.comm, fd, err);
 	sps_cnt += 7 + 17 + 4 + 4;
 	if (env.extended) {
-		printf("%08o ", e.flags);
+		if (e.mode == 0 && (e.flags & O_CREAT) == 0 &&
+		    (e.flags & O_TMPFILE) != O_TMPFILE)
+			printf("%08o n/a  ", e.flags);
+		else
+			printf("%08o %04o ", e.flags, e.mode);
 		sps_cnt += 9;
 	}
-	printf("%s\n", e.fname);
+	if (env.full_path) {
+		print_full_path(&e.fname);
+		printf("\n");
+	} else
+		printf("%s\n", e.fname.pathes);
 
 #ifdef USE_BLAZESYM
-	for (i = 0; result && i < result->size; i++) {
-		if (result->entries[i].size == 0)
+	for (i = 0; syms && i < syms->cnt; i++) {
+		sym = &syms->syms[i];
+		if (!sym->name)
 			continue;
-		sym = &result->entries[i].syms[0];
 
 		for (j = 0; j < sps_cnt; j++)
 			printf(" ");
-		if (sym->line_no)
-			printf("%s:%ld\n", sym->symbol, sym->line_no);
+		if (sym->code_info.line)
+			printf("%s:%u\n", sym->name, sym->code_info.line);
 		else
-			printf("%s\n", sym->symbol);
+			printf("%s\n", sym->name);
 	}
 
-	blazesym_result_free(result);
+	blaze_syms_free(syms);
 #endif
+	return 0;
 }
 
 void handle_lost_events(void *ctx, int cpu, __u64 lost_cnt)
@@ -293,7 +305,7 @@ int main(int argc, char **argv)
 		.parser = parse_arg,
 		.doc = argp_program_doc,
 	};
-	struct perf_buffer *pb = NULL;
+	struct bpf_buffer *buf = NULL;
 	struct opensnoop_bpf *obj;
 	__u64 time_end = 0;
 	int err;
@@ -316,16 +328,33 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	buf = bpf_buffer__new(obj->maps.events, obj->maps.heap);
+	if (!buf) {
+		err = -errno;
+		fprintf(stderr, "failed to create ring/perf buffer: %d", err);
+		goto cleanup;
+	}
+
 	/* initialize global data (filtering options) */
 	obj->rodata->targ_tgid = env.pid;
 	obj->rodata->targ_pid = env.tid;
 	obj->rodata->targ_uid = env.uid;
 	obj->rodata->targ_failed = env.failed;
+	obj->rodata->full_path = env.full_path;
 
 	/* aarch64 and riscv64 don't have open syscall */
 	if (!tracepoint_exists("syscalls", "sys_enter_open")) {
 		bpf_program__set_autoload(obj->progs.tracepoint__syscalls__sys_enter_open, false);
 		bpf_program__set_autoload(obj->progs.tracepoint__syscalls__sys_exit_open, false);
+	}
+
+	/**
+	 * linux since v5.5 support openat2(2), commit fddb5d430ad9 ("open:
+	 * introduce openat2(2) syscall").
+	 */
+	if (!tracepoint_exists("syscalls", "sys_enter_openat2")) {
+		bpf_program__set_autoload(obj->progs.tracepoint__syscalls__sys_enter_openat2, false);
+		bpf_program__set_autoload(obj->progs.tracepoint__syscalls__sys_exit_openat2, false);
 	}
 
 	err = opensnoop_bpf__load(obj);
@@ -341,8 +370,19 @@ int main(int argc, char **argv)
 	}
 
 #ifdef USE_BLAZESYM
-	if (env.callers)
-		symbolizer = blazesym_new();
+	if (env.callers) {
+		struct blaze_symbolizer_opts opts = {
+			.type_size = sizeof(opts),
+			.demangle = true,
+			.code_info = true,
+		};
+		symbolizer = blaze_symbolizer_new_opts(&opts);
+		if (!symbolizer) {
+			fprintf(stderr, "failed to create symbolizer\n");
+			err = -1;
+			goto cleanup;
+		}
+	}
 #endif
 
 	/* print headers */
@@ -352,7 +392,7 @@ int main(int argc, char **argv)
 		printf("%-7s ", "UID");
 	printf("%-6s %-16s %3s %3s ", "PID", "COMM", "FD", "ERR");
 	if (env.extended)
-		printf("%-8s ", "FLAGS");
+		printf("%-8s %-5s ", "FLAGS", "MODE");
 	printf("%s", "PATH");
 #ifdef USE_BLAZESYM
 	if (env.callers)
@@ -361,11 +401,10 @@ int main(int argc, char **argv)
 	printf("\n");
 
 	/* setup event callbacks */
-	pb = perf_buffer__new(bpf_map__fd(obj->maps.events), PERF_BUFFER_PAGES,
-			      handle_event, handle_lost_events, NULL, NULL);
-	if (!pb) {
+	err = bpf_buffer__open(buf, handle_event, handle_lost_events, NULL);
+	if (err) {
 		err = -errno;
-		fprintf(stderr, "failed to open perf buffer: %d\n", err);
+		fprintf(stderr, "failed to open ring/perf buffer: %d\n", err);
 		goto cleanup;
 	}
 
@@ -381,9 +420,9 @@ int main(int argc, char **argv)
 
 	/* main: poll */
 	while (!exiting) {
-		err = perf_buffer__poll(pb, PERF_POLL_TIMEOUT_MS);
+		err = bpf_buffer__poll(buf, POLL_TIMEOUT_MS);
 		if (err < 0 && err != -EINTR) {
-			fprintf(stderr, "error polling perf buffer: %s\n", strerror(-err));
+			fprintf(stderr, "error polling ring/perf buffer: %s\n", strerror(-err));
 			goto cleanup;
 		}
 		if (env.duration && get_ktime_ns() > time_end)
@@ -393,11 +432,11 @@ int main(int argc, char **argv)
 	}
 
 cleanup:
-	perf_buffer__free(pb);
+	bpf_buffer__free(buf);
 	opensnoop_bpf__destroy(obj);
 	cleanup_core_btf(&open_opts);
 #ifdef USE_BLAZESYM
-	blazesym_free(symbolizer);
+	blaze_symbolizer_free(symbolizer);
 #endif
 
 	return err != 0;
